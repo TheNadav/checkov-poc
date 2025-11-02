@@ -67,11 +67,6 @@ jobs:
 
             ### 📋 View Details
             **[Click here to view all issues in the Checks tab](${checksUrl})**
-
-            ### 🛠️ Next Steps
-            1. Review the issues in the Checks tab
-            2. Fix the infrastructure code issues
-            3. Push changes to re-trigger the scan
             `;
             } else {
               detailsSection = `
@@ -90,9 +85,7 @@ jobs:
             | ✅ Passed | ${passed} |
             | ❌ Failed | ${failed} |
             | ⏭️ Skipped | ${skipped} |
-            ${detailsSection}
-            ---
-            *Merged findings will be available in the [Security tab](${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/security/code-scanning).*`;
+            ${detailsSection}`;
 
             const { data: comments } = await github.rest.issues.listComments({
               owner,
