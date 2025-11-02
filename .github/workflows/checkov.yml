@@ -27,10 +27,17 @@ jobs:
         uses: bridgecrewio/checkov-action@v12
         with:
           directory: .
+          output_format: cli,sarif
+          output_file_path: console,results.sarif
+          # Uncomment below to enable private Terraform module scanning
+          # download_external_modules: true
+          # github_pat: ${{ secrets.GH_PAT }}
+        # env:
+          # GITHUB_OVERRIDE_URL: true  # Injects PAT into global Git config for private module access
         continue-on-error: true
 
       - name: Upload SARIF to Security Tab
-        if: always()
+        if: success() || failure()
         uses: github/codeql-action/upload-sarif@v3
         with:
           sarif_file: results.sarif
