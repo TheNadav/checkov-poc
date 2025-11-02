@@ -1,0 +1,124 @@
+name: Checkov IaC Scan
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: read
+  security-events: write
+  pull-requests: write
+
+jobs:
+  checkov_scan:
+    name: Checkov Scan
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Run Checkov Scan
+        id: checkov
+        uses: bridgecrewio/checkov-action@v12
+        with:
+          directory: .
+          output_format: sarif,cli
+          output_file_path: results.sarif
+        continue-on-error: true
+
+      - name: Upload SARIF to Security Tab
+        if: always()
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: results.sarif
+
+      - name: Post PR Comment
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const fs = require('fs');
+
+            // Read SARIF results
+            const sarif = JSON.parse(fs.readFileSync('results.sarif', 'utf8'));
+            const run = sarif.runs[0];
+            const results = run.results || [];
+
+            const failed = results.length;
+            const passed = run.properties?.passed || 0;
+            const skipped = run.properties?.skipped || 0;
+
+            const emoji = failed > 0 ? '❌' : '✅';
+            const statusMessage = failed > 0
+              ? `⚠️ **Checkov found ${failed} issue(s)**`
+              : `✅ **Checkov passed:** No issues found.`;
+
+            const { owner, repo } = context.repo;
+            const { GITHUB_SERVER_URL, GITHUB_REPOSITORY } = process.env;
+            const checksUrl = `${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/pull/${context.issue.number}/checks`;
+
+            let detailsSection = '';
+            if (failed > 0) {
+              detailsSection = `
+
+            ### 📋 View Details
+            **[Click here to view all issues in the Checks tab](${checksUrl})**
+
+            ### 🛠️ Next Steps
+            1. Review the issues in the Checks tab
+            2. Fix the infrastructure code issues
+            3. Push changes to re-trigger the scan
+            `;
+            } else {
+              detailsSection = `
+
+            ✅ All checks passed! Your infrastructure code meets security requirements.
+            `;
+            }
+
+            const commentBody = `## ${emoji} Checkov IaC Scan Results
+
+            ${statusMessage}
+
+            ### Summary
+            | Status | Count |
+            |:---|:---:|
+            | ✅ Passed | ${passed} |
+            | ❌ Failed | ${failed} |
+            | ⏭️ Skipped | ${skipped} |
+            ${detailsSection}
+            ---
+            *Merged findings will be available in the [Security tab](${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/security/code-scanning).*`;
+
+            const { data: comments } = await github.rest.issues.listComments({
+              owner,
+              repo,
+              issue_number: context.issue.number,
+            });
+
+            const botComment = comments.find(comment =>
+              comment.user.type === 'Bot' &&
+              comment.body.includes('Checkov IaC Scan Results')
+            );
+
+            if (botComment) {
+              await github.rest.issues.updateComment({
+                owner,
+                repo,
+                comment_id: botComment.id,
+                body: commentBody
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner,
+                repo,
+                issue_number: context.issue.number,
+                body: commentBody
+              });
+            }
