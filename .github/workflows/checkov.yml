@@ -27,7 +27,7 @@ jobs:
         uses: bridgecrewio/checkov-action@v12
         with:
           directory: .
-          output_format: sarif,cli
+          output_format: sarif
           output_file_path: results.sarif
         continue-on-error: true
 
