@@ -27,15 +27,13 @@ jobs:
         uses: bridgecrewio/checkov-action@v12
         with:
           directory: .
-          output_format: sarif
-          output_file_path: console,results.sarif
         continue-on-error: true
 
       - name: Upload SARIF to Security Tab
         if: always()
         uses: github/codeql-action/upload-sarif@v3
         with:
-          sarif_file: results.sarif/results.sarif
+          sarif_file: results.sarif
 
       - name: Post PR Comment
         if: github.event_name == 'pull_request'
@@ -45,8 +43,8 @@ jobs:
           script: |
             const fs = require('fs');
 
-            // Read SARIF results from the file in results.sarif directory
-            const sarif = JSON.parse(fs.readFileSync('results.sarif/results.sarif', 'utf8'));
+            // Read SARIF results
+            const sarif = JSON.parse(fs.readFileSync('results.sarif', 'utf8'));
             const run = sarif.runs[0];
             const results = run.results || [];
 
