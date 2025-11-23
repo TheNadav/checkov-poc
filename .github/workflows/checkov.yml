@@ -33,7 +33,7 @@ jobs:
           # download_external_modules: true
           # github_pat: ${{ secrets.GH_PAT }}
         # env:
-          # GITHUB_OVERRIDE_URL: true  # Injects PAT into global Git config for private module access
+        # GITHUB_OVERRIDE_URL: true  # Injects PAT into global Git config for private module access
         continue-on-error: true
 
       - name: Upload SARIF to Security Tab
