@@ -34,11 +34,17 @@ jobs:
                   ignore-unfixed: true
                   severity: "HIGH,CRITICAL"
 
+            - name: Filter SARIF Results (High/Critical Only)
+              run: |
+                  sudo apt-get install jq
+                  # Filter results to only keep those with level 'error' (High/Critical)
+                  jq 'del(.runs[].results[] | select(.level != "error"))' trivy-results.sarif > trivy-filtered.sarif
+
             - name: Upload SARIF to Security Tab
               if: success() || failure()
               uses: github/codeql-action/upload-sarif@v3
               with:
-                  sarif_file: "trivy-results.sarif"
+                  sarif_file: "trivy-filtered.sarif"
 
             - name: Post PR Comment
               if: github.event_name == 'pull_request' && (success() || failure())
@@ -49,7 +55,7 @@ jobs:
                       const fs = require('fs');
 
                       try {
-                        const sarif = JSON.parse(fs.readFileSync('trivy-results.sarif', 'utf8'));
+                        const sarif = JSON.parse(fs.readFileSync('trivy-filtered.sarif', 'utf8'));
                         const run = sarif.runs[0];
                         const results = run.results || [];
                         const failed = results.length;
