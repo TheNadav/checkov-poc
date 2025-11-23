@@ -76,7 +76,9 @@ jobs:
                         const checksUrl = `${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/pull/${context.issue.number}/checks`;
 
                         const commentBody = `❌ Trivy IaC Scan Results
-                        ${statusMessage}`;
+                        ${statusMessage}
+                        
+                        [View detailed results](${checksUrl})`;
 
                         const { data: comments } = await github.rest.issues.listComments({
                           owner,
