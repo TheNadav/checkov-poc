@@ -35,14 +35,20 @@ jobs:
                   severity: "HIGH,CRITICAL"
 
             - name: Filter SARIF Results (High/Critical Only)
+              if: success() || failure()
               run: |
                   sudo apt-get install jq
                   # Filter results to only keep those with level 'error' (High/Critical)
-                  jq 'del(.runs[].results[] | select(.level != "error"))' trivy-results.sarif > trivy-filtered.sarif
+                  if [ -f trivy-results.sarif ]; then
+                    jq 'del(.runs[].results[] | select(.level != "error"))' trivy-results.sarif > trivy-filtered.sarif
+                  else
+                    echo "trivy-results.sarif not found"
+                    exit 1
+                  fi
 
             - name: Upload SARIF to Security Tab
               if: success() || failure()
-              uses: github/codeql-action/upload-sarif@v3
+              uses: github/codeql-action/upload-sarif@v4
               with:
                   sarif_file: "trivy-filtered.sarif"
 
