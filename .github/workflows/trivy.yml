@@ -40,17 +40,31 @@ jobs:
       # ------------------------------------------------------------------------
       # MUST HAVE: 'config' scan type for Terraform
       # ------------------------------------------------------------------------
-      - name: Run Trivy Vulnerability Scanner
-        uses: aquasecurity/trivy-action@master
+      - name: Run Trivy Vulnerability Scanner (SARIF)
+        uses: aquasecurity/trivy-action@0.33.1
         with:
           scan-type: "config"
           hide-progress: false
           format: "sarif"
           output: "trivy-results.sarif"
           exit-code: "1"            # Fail the build if issues are found
-          ignore-unfixed: true      # Ignore vulnerabilities with no fix
           severity: "HIGH,CRITICAL" # Only fail on major issues
           trivyignores: .trivyignore # Use the file we created above
+
+      # ------------------------------------------------------------------------
+      # Generate JSON output for detailed PR comments with remediation guidance
+      # ------------------------------------------------------------------------
+      - name: Run Trivy Vulnerability Scanner (JSON)
+        if: always() # Run even if SARIF scan failed
+        uses: aquasecurity/trivy-action@0.33.1
+        with:
+          scan-type: "config"
+          hide-progress: false
+          format: "json"
+          output: "trivy-results.json"
+          exit-code: "0"            # Don't fail - we already failed above if needed
+          severity: "HIGH,CRITICAL"
+          trivyignores: .trivyignore
 
       # ------------------------------------------------------------------------
       # Upload results to GitHub Security Tab (Code Scanning)
@@ -73,17 +87,30 @@ jobs:
             const fs = require('fs');
 
             try {
-              // Read the SARIF file to count issues
-              const sarif = JSON.parse(fs.readFileSync('trivy-results.sarif', 'utf8'));
-              // SARIF structure handling: sometimes 'results' is undefined if empty
-              const run = sarif.runs && sarif.runs[0];
-              const results = run && run.results ? run.results : [];
-              const failedCount = results.length;
-              
+              // Read the JSON file for detailed information
+              const trivyJson = JSON.parse(fs.readFileSync('trivy-results.json', 'utf8'));
+
+              // Extract all misconfigurations from all results
+              let allIssues = [];
+              if (trivyJson.Results) {
+                trivyJson.Results.forEach(result => {
+                  if (result.Misconfigurations) {
+                    result.Misconfigurations.forEach(issue => {
+                      allIssues.push({
+                        ...issue,
+                        Target: result.Target // Add file path info
+                      });
+                    });
+                  }
+                });
+              }
+
+              const failedCount = allIssues.length;
+
               // Define Status
               const emoji = failedCount > 0 ? '❌' : '✅';
-              const title = failedCount > 0 
-                ? `⚠️ Trivy found ${failedCount} High/Critical Issues` 
+              const title = failedCount > 0
+                ? `⚠️ Trivy found ${failedCount} High/Critical Issue${failedCount > 1 ? 's' : ''}`
                 : `✅ Trivy Security Scan Passed`;
 
               const { owner, repo } = context.repo;
@@ -91,25 +118,38 @@ jobs:
               // Link to the "Files Changed" tab where annotations appear
               const checksUrl = `${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/pull/${context.issue.number}/files`;
 
+              // Build detailed table with file paths and remediation
+              let detailsTable = '';
+              if (failedCount > 0) {
+                detailsTable = `| File | Rule ID | Severity | Issue | Remediation |
+              | :--- | :--- | :--- | :--- | :--- |
+              ${allIssues.slice(0, 15).map(issue => {
+                const file = issue.Target || 'N/A';
+                const ruleId = issue.AVDID || issue.ID || 'N/A';
+                const severity = issue.Severity || 'UNKNOWN';
+                const title = (issue.Title || 'No description').replace(/\|/g, '\\|');
+                const remediation = (issue.Resolution || 'See documentation').replace(/\|/g, '\\|').substring(0, 100);
+                const avdUrl = ruleId.startsWith('AVD') ? `https://avd.aquasec.com/misconfig/${ruleId.toLowerCase()}` : '#';
+                return `| \`${file}\` | [${ruleId}](${avdUrl}) | **${severity}** | ${title} | ${remediation}${remediation.length >= 100 ? '...' : ''} |`;
+              }).join('\n')}
+              ${failedCount > 15 ? `\n_... and ${failedCount - 15} more issue${failedCount - 15 > 1 ? 's' : ''}._` : ''}`;
+              }
+
               // Build the comment body
               const commentBody = `### ${emoji} Trivy IaC Scan Results
 
               **Status**: ${title}
 
-              <details>
-              <summary>Show Details</summary>
+              ${failedCount > 0 ? `<details>
+              <summary>📋 Show ${failedCount} Issue${failedCount > 1 ? 's' : ''} (with remediation guidance)</summary>
 
-              | Rule ID | Severity | Description |
-              | :--- | :--- | :--- |
-              ${results.slice(0, 10).map(r => {
-                const msg = r.message?.text || r.message?.markdown || JSON.stringify(r.message);
-                return `| ${r.ruleId} | ${r.level} | ${msg} |`;
-              }).join('\n')}
-              ${failedCount > 10 ? `\n... and ${failedCount - 10} more.` : ''}
+              ${detailsTable}
 
               </details>
 
-              [View full annotations in Files tab](${checksUrl})`;
+              💡 **Tip**: Click on Rule IDs for detailed documentation and examples.
+
+              [View full annotations in Files tab](${checksUrl})` : '🎉 No security issues found in your infrastructure code!'}`;
 
               // Find existing bot comment to update (avoid spamming)
               const { data: comments } = await github.rest.issues.listComments({
@@ -118,8 +158,8 @@ jobs:
                 issue_number: context.issue.number,
               });
 
-              const botComment = comments.find(comment => 
-                comment.user.type === 'Bot' && 
+              const botComment = comments.find(comment =>
+                comment.user.type === 'Bot' &&
                 comment.body.includes('Trivy IaC Scan Results')
               );
 
@@ -139,5 +179,6 @@ jobs:
                 });
               }
             } catch (error) {
-              console.log('Error processing SARIF or posting comment:', error);
+              console.log('Error processing JSON or posting comment:', error);
+              console.log('Error details:', error.message);
             }
