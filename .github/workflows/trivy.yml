@@ -93,17 +93,20 @@ jobs:
 
               // Build the comment body
               const commentBody = `### ${emoji} Trivy IaC Scan Results
-              
+
               **Status**: ${title}
-              
+
               <details>
               <summary>Show Details</summary>
-              
+
               | Rule ID | Severity | Description |
               | :--- | :--- | :--- |
-              ${results.slice(0, 10).map(r => `| ${r.ruleId} | ${r.level} | ${r.message} |`).join('\n')}
+              ${results.slice(0, 10).map(r => {
+                const msg = r.message?.text || r.message?.markdown || JSON.stringify(r.message);
+                return `| ${r.ruleId} | ${r.level} | ${msg} |`;
+              }).join('\n')}
               ${failedCount > 10 ? `\n... and ${failedCount - 10} more.` : ''}
-              
+
               </details>
 
               [View full annotations in Files tab](${checksUrl})`;
