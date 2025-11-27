@@ -8,8 +8,8 @@ on:
 
 permissions:
   contents: read
-  security-events: write # Required for uploading to Security Tab
-  pull-requests: write   # Required for posting comments on PRs
+  security-events: write # For uploading to Security Tab
+  pull-requests: write   # For commenting on PRs
 
 jobs:
   trivy_scan:
@@ -20,25 +20,23 @@ jobs:
         uses: actions/checkout@v4
 
       # ------------------------------------------------------------------------
-      # MUST HAVE: Ignore specific noisy rules here.
-      # We create a .trivyignore file dynamically.
-      # You can find Rule IDs at: https://avd.aquasec.com/
+      # 1. Create .trivyignore (Dynamic Exclusions)
       # ------------------------------------------------------------------------
       - name: Create .trivyignore
         run: |
           cat <<EOF > .trivyignore
-          # Ignore: S3 Bucket Logging Enabled (Often handled by a central audit bucket)
+          # AWS S3: Server Access Logging (Often handled centrally)
           AVD-AWS-0089
-          # Ignore: S3 Bucket Encryption (If you trust AWS default encryption)
+          # AWS S3: Encryption (If relying on AWS managed keys)
           AVD-AWS-0132
-          # Ignore: Ensure that CloudWatch Log Group is encrypted by KMS
+          # AWS CloudWatch: Log Group Encryption
           AVD-AWS-0017
-          # Ignore: Security Group Rules should include a description
+          # AWS Security Group: Missing Description
           AVD-AWS-0124
           EOF
 
       # ------------------------------------------------------------------------
-      # MUST HAVE: 'config' scan type for Terraform
+      # 2. Run Trivy (Config Mode for IaC)
       # ------------------------------------------------------------------------
       - name: Run Trivy Vulnerability Scanner
         uses: aquasecurity/trivy-action@master
@@ -47,78 +45,85 @@ jobs:
           hide-progress: false
           format: "sarif"
           output: "trivy-results.sarif"
-          exit-code: "1"            # Fail the build if issues are found
-          ignore-unfixed: true      # Ignore vulnerabilities with no fix
-          severity: "HIGH,CRITICAL" # Only fail on major issues
-          trivyignores: .trivyignore # Use the file we created above
+          exit-code: "1"            # Fail build on issues
+          ignore-unfixed: true
+          severity: "HIGH,CRITICAL" # Only major issues
+          trivyignores: .trivyignore
 
       # ------------------------------------------------------------------------
-      # Upload results to GitHub Security Tab (Code Scanning)
+      # 3. Upload Results to GitHub Security Tab
+      #    (This creates the "Annotations" inside the Files Changed tab)
       # ------------------------------------------------------------------------
       - name: Upload SARIF to Security Tab
-        if: success() || failure() # Run even if Trivy found issues
+        if: success() || failure()
         uses: github/codeql-action/upload-sarif@v4
         with:
           sarif_file: "trivy-results.sarif"
 
       # ------------------------------------------------------------------------
-      # Post a friendly comment to the PR
+      # 4. Post Single Summary Comment
       # ------------------------------------------------------------------------
-      - name: Post PR Comment
+      - name: Post/Update PR Comment
         if: github.event_name == 'pull_request' && (success() || failure())
         uses: actions/github-script@v7
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           script: |
             const fs = require('fs');
+            
+            // Unique Marker to identify OUR comment (prevents duplicates)
+            const MARKER = '';
 
             try {
-              // Read the SARIF file to count issues
               const sarif = JSON.parse(fs.readFileSync('trivy-results.sarif', 'utf8'));
-              // SARIF structure handling: sometimes 'results' is undefined if empty
               const run = sarif.runs && sarif.runs[0];
               const results = run && run.results ? run.results : [];
               const failedCount = results.length;
               
-              // Define Status
+              // Determine Status
               const emoji = failedCount > 0 ? '❌' : '✅';
-              const title = failedCount > 0 
-                ? `⚠️ Trivy found ${failedCount} High/Critical Issues` 
-                : `✅ Trivy Security Scan Passed`;
+              const summaryText = failedCount > 0 
+                ? `⚠️ **Trivy found ${failedCount} High/Critical Issues**` 
+                : `✅ **Trivy Scan Passed**`;
 
+              // Generate Table Rows (Limit to first 20 to avoid giant comments)
+              const rows = results.slice(0, 20).map(r => {
+                const ruleId = r.ruleId;
+                const level = r.level;
+                // Try to get clean file path and line
+                const location = r.locations && r.locations[0] && r.locations[0].physicalLocation;
+                const file = location ? location.artifactLocation.uri : 'Unknown';
+                const line = location ? location.region.startLine : '?';
+                const msg = r.message.replace(/\n/g, ' '); // remove newlines for table
+                
+                return `| ${level} | \`${file}:${line}\` | ${ruleId} | ${msg} |`;
+              }).join('\n');
+
+              // Build Comment Body
+              let commentBody = `${MARKER}\n### ${emoji} Trivy IaC Scan Results\n\n${summaryText}\n\n`;
+              
+              if (failedCount > 0) {
+                commentBody += `<details><summary><b>Click to view detailed findings</b></summary>\n\n`;
+                commentBody += `| Severity | Location | Rule | Message |\n| :--- | :--- | :--- | :--- |\n${rows}\n`;
+                
+                if (failedCount > 20) {
+                  commentBody += `\n...and ${failedCount - 20} more issues (see Files tab).`;
+                }
+                commentBody += `\n</details>`;
+              } else {
+                commentBody += `No High or Critical infrastructure misconfigurations found.`;
+              }
+
+              // GitHub API Interaction
               const { owner, repo } = context.repo;
-              const { GITHUB_SERVER_URL, GITHUB_REPOSITORY } = process.env;
-              // Link to the "Files Changed" tab where annotations appear
-              const checksUrl = `${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/pull/${context.issue.number}/files`;
-
-              // Build the comment body
-              const commentBody = `### ${emoji} Trivy IaC Scan Results
-              
-              **Status**: ${title}
-              
-              <details>
-              <summary>Show Details</summary>
-              
-              | Rule ID | Severity | Description |
-              | :--- | :--- | :--- |
-              ${results.slice(0, 10).map(r => `| ${r.ruleId} | ${r.level} | ${r.message} |`).join('\n')}
-              ${failedCount > 10 ? `\n... and ${failedCount - 10} more.` : ''}
-              
-              </details>
-
-              [View full annotations in Files tab](${checksUrl})`;
-
-              // Find existing bot comment to update (avoid spamming)
               const { data: comments } = await github.rest.issues.listComments({
                 owner,
                 repo,
                 issue_number: context.issue.number,
               });
 
-              const botComment = comments.find(comment => 
-                comment.user.type === 'Bot' && 
-                comment.body.includes('Trivy IaC Scan Results')
-              );
+              // Find previous comment by Marker
+              const botComment = comments.find(c => c.body.includes(MARKER));
 
               if (botComment) {
                 await github.rest.issues.updateComment({
@@ -136,5 +141,5 @@ jobs:
                 });
               }
             } catch (error) {
-              console.log('Error processing SARIF or posting comment:', error);
+              console.log('Error in script:', error);
             }
